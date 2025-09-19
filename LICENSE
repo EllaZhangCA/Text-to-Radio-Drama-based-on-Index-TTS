@@ -1,0 +1,52 @@
+MIT License
+===========
+
+Copyright (c) 2025 Ella Zhang
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software Code"),
+to deal in the Software Code without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software Code, and to permit persons to whom the Software
+Code is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software Code.
+
+THE SOFTWARE CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE CODE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE CODE.
+
+
+Bilibili Model Use License Agreement Notice
+===========================================
+
+This project incorporates or depends on the AI model **bilibili indextts2**
+(or its Derivative Works), which is subject to the **bilibili Model Use License Agreement**.
+
+The Model and any Derivative Works are governed by the terms and conditions
+of the bilibili Model Use License Agreement, available at:
+
+https://github.com/index-tts/index-tts
+
+Key Points:
+- You may not use the bilibili indextts2 model or any Derivative Work to
+  improve other AI models, except for indextts2 itself, its Derivative Works,
+  or non-commercial AI models.
+- Large-scale commercial use (monthly active users >100M, or annual revenue >1B RMB)
+  requires a separate license from bilibili.
+- The Model is provided "AS IS", without warranties of any kind.
+- You are fully responsible for compliance with all applicable laws and
+  for any consequences arising from use of the Model or its Derivative Works.
+- In case of conflict between this notice and the bilibili Model Use License
+  Agreement, the latter shall prevail.
+
+By using this project, you agree that:
+- The **code** is licensed under the MIT License (as described above).
+- The **model files** and any outputs or Derivative Works are licensed under
+  the bilibili Model Use License Agreement.
+
