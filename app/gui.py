@@ -16,7 +16,7 @@ LAST_EDIT_TS = 0.0
 EDIT_LOCK = threading.Lock()
 
 ROLES_CACHE: List[List[str]] = [[""], [""]]  # 角色名单缓存（只 1 列：name）
-ROLES_LOCK = threading.Lock()
+ROLES_LOCK = threading.RLock()
 
 # ---------------- 工具函数 ----------------
 def _to_rows(maybe_df):
@@ -119,6 +119,7 @@ STRINGS = {
         "zh": "中文",
         "en": "English",
         "ckpt_path": "IndexTTS2 checkpoints 路径（包含 config.yaml、gpt.pth、s2mel.pth 等）",
+        "gen_all": "生成全部台词+全部旁白",
     },
     "en": {
         "title": "Novel to Radio (Based on IndexTTS2)",
@@ -161,6 +162,7 @@ STRINGS = {
         "zh": "中文",
         "en": "English",
         "ckpt_path": "IndexTTS2 checkpoints path (folder containing config.yaml, gpt.pth, s2mel.pth, ...)",
+        "gen_all": "Synthesize ALL (dialog + narration)",
     }
 }
 
@@ -201,7 +203,7 @@ def launch_app():
             silence_ms = gr.Slider(0, 2000, value=DEFAULT_SILENCE_MS, step=10, label=t("zh","silence"))
             lang_sel = gr.Dropdown(choices=["中文","English"], value="中文", label=t("zh","lang"))
             default_ckpt = os.environ.get("INDEXTTS_CHECKPOINTS")
-            ckpt_dir = gr.Textbox(label=t("zh","ckpt_path"), value=default_ckpt)
+            ckpt_dir = gr.Textbox(label=t("zh","ckpt_path"), value=default_ckpt or "", interactive=True)
 
         # 角色 & 音频绑定
         with gr.Tab(t("zh","tab_roles")):
@@ -216,7 +218,9 @@ def launch_app():
 
             # 2) 加入/移除 控件
             with gr.Row():
-                role_name_input = gr.Textbox(label=t("zh","role_input"), placeholder="小明 / 小红 / Narrator ...")
+                role_name_input = gr.Textbox(label=t("zh","role_input"),
+                                             placeholder="小明 / 小红 / Narrator ...",
+                                             interactive=True)
                 btn_add_role = gr.Button(t("zh","add_role"))
             with gr.Row():
                 role_remove_sel = gr.Dropdown(choices=[], label=t("zh","remove_role_sel"))
@@ -252,6 +256,7 @@ def launch_app():
                 seq_input = gr.Number(label=t("zh","seq_input"), precision=0, value=1)
                 btn_gen_one_role = gr.Button(t("zh","gen_one_role"))
                 btn_gen_one_narr = gr.Button(t("zh","gen_one_narr"))
+                btn_gen_all   = gr.Button(t("zh","gen_all"))
 
             role_files_table = gr.Dataframe(
                 headers=["seq", "path", "label"], datatype=["number", "str", "str"],
@@ -292,7 +297,9 @@ def launch_app():
                 gr.update(label=t(lang,"lang")),                           # lang_sel
                 gr.update(value="### " + t(lang,"roles_table_title")),     # roles_title
                 gr.update(headers=[t(lang,"roles_table_name")]),           # roles_df headers
-                gr.update(label=t(lang,"role_input"), placeholder="小明 / 小红 / Narrator ..."),  # role_name_input
+                gr.update(label=t(lang,"role_input"),
+                          placeholder="name",
+                          interactive=True),                               # role_name_input
                 gr.update(value=t(lang,"add_role")),                       # btn_add_role
                 gr.update(label=t(lang,"remove_role_sel")),                # role_remove_sel
                 gr.update(value=t(lang,"remove_role")),                    # btn_remove_role
@@ -306,6 +313,7 @@ def launch_app():
                 gr.update(value=t(lang,"save_edits")),                     # btn_save_edits
                 gr.update(value=t(lang,"gen_roles")),                      # btn_gen_roles
                 gr.update(value=t(lang,"gen_narr")),                       # btn_gen_narr
+                gr.update(value=t(lang,"gen_all")),                        # btn_gen_all
                 gr.update(label=t(lang,"seq_input")),                      # seq_input
                 gr.update(value=t(lang,"gen_one_role")),                   # btn_gen_one_role
                 gr.update(value=t(lang,"gen_one_narr")),                   # btn_gen_one_narr
@@ -329,43 +337,90 @@ def launch_app():
                 roles_title, roles_df, role_name_input, btn_add_role, role_remove_sel, btn_remove_role,
                 upload_refs_lbl, role_audio_files, mapping_df, narrator_audio,
                 btn_extract, seg_table, seg_json, btn_save_edits,
-                btn_gen_roles, btn_gen_narr, seq_input, btn_gen_one_role, btn_gen_one_narr,
+                btn_gen_roles, btn_gen_narr,btn_gen_all, seq_input, btn_gen_one_role, btn_gen_one_narr,
                 role_files_table, narr_files_table, pick_file, audio_preview,
                 json_batch_title_md, segments_json_batch, import_segments_json_btn, btn_merge, merged_audio, ckpt_dir
             ]
         )
 
         # -------- 角色：加入 & 移除 --------
-        def _roles_list() -> List[str]:
-            return [r[0].strip() for r in ROLES_CACHE if r and r[0].strip()]
+        def _roles_list_safe():
+            """从全局缓存取去重后的角色名列表。"""
+            with ROLES_LOCK:
+                names = []
+                for r in ROLES_CACHE:
+                    if isinstance(r, list) and r and str(r[0]).strip():
+                        names.append(str(r[0]).strip())
+                # 去重 + 保序
+                seen = set(); ordered = []
+                for n in names:
+                    if n not in seen:
+                        seen.add(n); ordered.append(n)
+                return ordered
 
-        def _refresh_roles_views():
-            # 展示 DataFrame 与下拉框
-            view_rows = [[n] for n in (_roles_list() or ["",""])]
+        def _refresh_roles_views_safe():
+            """返回：roles_df 的显示数据更新 + 移除下拉 choices 更新"""
+            names = _roles_list_safe()
+            view_rows = [[n] for n in (names if names else ["",""])]
             if len(view_rows) < 2:
                 view_rows += [[""]] * (2 - len(view_rows))
-            choices = _roles_list()
-            return gr.update(value=view_rows), gr.update(choices=choices, value=None)
+            return gr.update(value=view_rows), gr.update(choices=names, value=None)
 
-        def add_role(name, cur_mapping):
-            name = (name or "").strip()
-            if not name:
-                return gr.update(), gr.update(), gr.update(value="")  # no-op
-            with ROLES_LOCK:
-                names = _roles_list()
-                if name not in names:
-                    ROLES_CACHE.append([name])
-            # 显示 DataFrame 与下拉刷新
-            roles_view_u, remove_sel_u = _refresh_roles_views()
-            # 同步：映射表追加一行 [空路径, name]
+        def _normalize_mapping_rows(cur_mapping):
+            """把 DataFrame/列表统一成二维list，并确保每行有两列 [audio_path, name]"""
             rows = _to_rows(cur_mapping)
-            rows.append(["", name])
-            return roles_view_u, remove_sel_u, gr.update(value=""), rows
+            fixed = []
+            for r in rows:
+                if not isinstance(r, list):
+                    r = [str(r)]
+                if len(r) < 2:
+                    r += [""] * (2 - len(r))
+                fixed.append([r[0] or "", r[1] or ""])
+            return fixed
+
+        def add_role(role_name: str, cur_mapping):
+            """加入角色：写入缓存 + 刷新只读表 + 把名字落到绑定表第二列的第一个空位。"""
+            try:
+                name = (role_name or "").strip()
+                if not name:
+                    return gr.update(), gr.update(), gr.update(value=""), cur_mapping
+
+                # 1) 更新全局缓存
+                with ROLES_LOCK:
+                    existing = []
+                    for r in ROLES_CACHE:
+                        if isinstance(r, list) and r and str(r[0]).strip():
+                            existing.append(str(r[0]).strip())
+                    if name not in existing:
+                        ROLES_CACHE.append([name])
+
+                # 2) 刷新“角色名单”只读视图与移除下拉
+                roles_view_u, remove_sel_u = _refresh_roles_views_safe()
+
+                # 3) 同步到绑定表：把名字填进第一条 name 为空且 audio_path 已有的行；没有空位则追加新行
+                rows = _normalize_mapping_rows(cur_mapping)
+                placed = False
+                for i, r in enumerate(rows):
+                    audio_path = (r[0] or "").strip()
+                    role_cell = (r[1] or "").strip()
+                    if audio_path and not role_cell:
+                        rows[i][1] = name
+                        placed = True
+                        break
+                if not placed:
+                    rows.append(["", name])
+
+                # 4) 返回：更新 roles_df、移除下拉、清空输入框、更新绑定表
+                return roles_view_u, remove_sel_u, gr.update(value=""), rows
+
+            except Exception:
+                # 出错时不改变任何表，仅清空输入框，避免卡住
+                return gr.update(), gr.update(), gr.update(value=""), cur_mapping
 
         btn_add_role.click(
             add_role,
             inputs=[role_name_input, mapping_df],
-            outputs=[roles_df, role_remove_sel, role_name_input, mapping_df]
+            outputs=[roles_df, role_remove_sel, role_name_input, mapping_df],
         )
 
         def remove_role(name_to_remove, cur_mapping):
@@ -376,14 +431,14 @@ def launch_app():
             with ROLES_LOCK:
                 kept = []
                 for r in ROLES_CACHE:
-                    if r and r[0].strip() != name:
+                    if r and (r[0] or "").strip() != name:
                         kept.append([r[0]])
                 ROLES_CACHE.clear()
-                ROLES_CACHE.extend(kept if kept else [[""],[""]])
+                ROLES_CACHE.extend(kept if kept else [[""], [""]])
             # 显示 DataFrame 与下拉刷新
-            roles_view_u, remove_sel_u = _refresh_roles_views()
+            roles_view_u, remove_sel_u = _refresh_roles_views_safe()
             # 同步：映射表删除所有该角色的行
-            rows = [r for r in _to_rows(cur_mapping) if not (len(r)>=2 and (r[1] or "").strip()==name)]
+            rows = [r for r in _normalize_mapping_rows(cur_mapping) if (r[1] or "").strip() != name]
             return roles_view_u, remove_sel_u, rows
 
         btn_remove_role.click(
@@ -392,17 +447,44 @@ def launch_app():
             outputs=[roles_df, role_remove_sel, mapping_df]
         )
 
-        # 角色参考音频 → 绑定表（仅把路径追加到第一列，第二列由“加入角色”负责填）
+        # 参考音频 → 绑定表（仅把路径追加到第一列，第二列由“加入角色”负责填）
         def on_files_append_to_mapping(files, cur_table):
-            rows = _to_rows(cur_table)
-            seen = {r[0] for r in rows if r and len(r) >= 1}
+            """
+            把新上传的文件路径按顺序填到“第一个空的 audio_path 单元格”，
+            如果没有空位则在表尾追加新行 [file, ""]
+            """
+            rows = _normalize_mapping_rows(cur_table)
+
+            # 已存在路径集合（避免重复）
+            seen = { (r[0] or "").strip() for r in rows if r and len(r) >= 1 }
+
             for fp in (files or []):
-                if fp and fp not in seen:
+                if not fp:
+                    continue
+                if fp in seen:
+                    continue
+
+                placed = False
+                # 先找第一条“audio_path 为空”的行，把路径填进去（不要求 name 是否已填）
+                for i, r in enumerate(rows):
+                    if not (r and len(r) >= 1):
+                        continue
+                    if not (r[0] or "").strip():  # 空路径
+                        rows[i][0] = fp
+                        placed = True
+                        break
+
+                if not placed:
+                    # 没有空位就追加新行
                     rows.append([fp, ""])
-                    seen.add(fp)
+
+                seen.add(fp)
+
             return rows
 
-        role_audio_files.change(on_files_append_to_mapping, inputs=[role_audio_files, mapping_df], outputs=[mapping_df])
+        role_audio_files.change(on_files_append_to_mapping,
+                                inputs=[role_audio_files, mapping_df],
+                                outputs=[mapping_df])
 
         # 抓取片段
         def on_extract(novel, _roles_df_unused):
@@ -504,28 +586,48 @@ def launch_app():
             return vm
 
         # --- 批量生成（全部） ---
-        def gen_roles(mapping_rows, narrator_fp, emo_alpha, _segs_ignored, ckpt_dir):
+        def gen_roles(mapping_rows, narrator_fp, emo_alpha, _segs_ignored, ckpt_dir_val):
             seg_objs = [Segment(**d) for d in (SEG_CACHE or []) if d["kind"] == "dialog"]
             if not seg_objs:
                 return [], [], gr.update(choices=[])
-            outs = batch_synthesize(seg_objs, build_voice_map(mapping_rows, narrator_fp), emo_alpha, OUT_DIR, ckpt_dir)
+            outs = batch_synthesize(seg_objs, build_voice_map(mapping_rows, narrator_fp), emo_alpha, OUT_DIR, ckpt_dir_val)
             return [[seq, path, label] for (path, seq, label) in outs], outs, gr.update(choices=[lab for _, _, lab in outs])
 
-
-        def gen_narr(mapping_rows, narrator_fp, emo_alpha, _segs_ignored, ckpt_dir):
+        def gen_narr(mapping_rows, narrator_fp, emo_alpha, _segs_ignored, ckpt_dir_val):
             seg_objs = [Segment(**d) for d in (SEG_CACHE or []) if d["kind"] == "narration"]
             if not seg_objs:
                 return [], [], gr.update(choices=[])
-            outs = batch_synthesize(seg_objs, build_voice_map(mapping_rows, narrator_fp), emo_alpha, OUT_DIR, ckpt_dir)
+            outs = batch_synthesize(seg_objs, build_voice_map(mapping_rows, narrator_fp), emo_alpha, OUT_DIR, ckpt_dir_val)
             return [[seq, path, label] for (path, seq, label) in outs], outs, gr.update(choices=[lab for _, _, lab in outs])
+
+        def gen_all(mapping_rows, narrator_fp, emo_alpha, _segs_ignored, ckpt_dir_val):
+            dialog_targets = [Segment(**d) for d in (SEG_CACHE or []) if d["kind"] == "dialog"]
+            narr_targets   = [Segment(**d) for d in (SEG_CACHE or []) if d["kind"] == "narration"]
+
+            vm = build_voice_map(mapping_rows, narrator_fp)
+
+            dialog_outs = batch_synthesize(dialog_targets, vm, emo_alpha, OUT_DIR, ckpt_dir_val) if dialog_targets else []
+            narr_outs   = batch_synthesize(narr_targets,   vm, emo_alpha, OUT_DIR, ckpt_dir_val) if narr_targets   else []
+
+            role_rows  = [[seq, path, label] for (path, seq, label) in dialog_outs]
+            narr_rows  = [[seq, path, label] for (path, seq, label) in narr_outs]
+            all_labels = [lab for _,_,lab in dialog_outs + narr_outs]
+
+            return role_rows, dialog_outs, narr_rows, narr_outs, gr.update(choices=all_labels)
+
 
         btn_gen_roles.click(gen_roles, inputs=[mapping_df, narrator_audio, emo_alpha, seg_state, ckpt_dir],
                             outputs=[role_files_table, role_items_state, pick_file])
         btn_gen_narr.click(gen_narr, inputs=[mapping_df, narrator_audio, emo_alpha, seg_state, ckpt_dir],
                            outputs=[narr_files_table, narr_items_state, pick_file])
+        btn_gen_all.click(
+            gen_all,
+            inputs=[mapping_df, narrator_audio, emo_alpha, seg_state, ckpt_dir],
+            outputs=[role_files_table, role_items_state, narr_files_table, narr_items_state, pick_file],
+        )
 
         # --- 单条生成（按 seq） ---
-        def gen_one(mapping_rows, narrator_fp, emo_alpha, _segs_ignored, seq, kind, ckpt_dir):
+        def gen_one(mapping_rows, narrator_fp, emo_alpha, _segs_ignored, seq, kind, ckpt_dir_val):
             try:
                 seq = int(seq)
             except Exception:
@@ -533,7 +635,7 @@ def launch_app():
             targets = [Segment(**d) for d in (SEG_CACHE or []) if d["seq"] == seq and d["kind"] == kind]
             if not targets:
                 return [], [], gr.update(choices=[])
-            outs = batch_synthesize(targets, build_voice_map(mapping_rows, narrator_fp), emo_alpha, OUT_DIR, ckpt_dir)
+            outs = batch_synthesize(targets, build_voice_map(mapping_rows, narrator_fp), emo_alpha, OUT_DIR, ckpt_dir_val)
             table_rows = [[s, p, l] for (p, s, l) in outs]
             choices = [l for _, _, l in outs]
             return table_rows, outs, gr.update(choices=choices)
