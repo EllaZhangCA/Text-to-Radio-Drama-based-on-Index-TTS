@@ -24,7 +24,7 @@ conda activate Index-TTS
 ```
 2. 打开本项目文件夹（假设本项目位于D:\txt2radio）
 ```bash
-conda activate Index-TTS
+cd D:\txt2radio
 ```
 3. 安装依赖
 ```bash
